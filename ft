@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+set -e
+USER_INITIALS=$1
+KEY_TARGETS=$2
+HOURS=$3
+KEY_SUFFIX=""
+
+# forces ssh-add to ask for the password in the terminal
+unset DISPLAY
+
+load_main_key () {
+  echo "Loading main key"
+  lpass show --notes "ssh keys/id_rsa" | /usr/bin/ssh-add -t ${HOURS}H -
+}
+
+load_multiple_keys () {
+  for KEY_TARGET in ${1//,/ }; do
+    echo "Loading $KEY_TARGET key"
+    lpass show --notes "ssh keys/id_rsa-$KEY_TARGET" | /usr/bin/ssh-add -t ${HOURS}H -
+  done
+}
+
+print_usage () {
+  if [[ -e $1 ]]; then echo "$1"; fi
+  echo "Usage: ft <user_initials|lastpass_email> <key suffix (comma separated, no spaces)> [hours_to_login]"
+  echo "   eg: ft user@example.org aws,linode,digitalocean 6"
+  exit 1
+}
+
+set_default_time () {
+  CURRENT_HOUR=`date +%H | sed 's/^0//'`
+  HOURS=`expr 18 - $CURRENT_HOUR`
+  if [[ $HOURS -lt 3 ]]; then HOURS=3; fi
+}
+
+login_user () {
+  USER_PREFIX=$(grep $USER_INITIALS ~/.git-authors | awk -F '; ' '{print $2}')
+  if [[ $USER_PREFIX == "" ]]; then
+    USER=$USER_INITIALS
+    echo 'Unknown initial. Using as email'
+  else
+    USER_DOMAIN=$(grep domain ~/.git-authors | awk -F ': ' '{print $2}')
+    USER="$USER_PREFIX@$USER_DOMAIN"
+  fi
+
+  if [[ `lpass status` != *$USER* ]]; then
+    lpass login $USER
+  fi
+}
+
+remove_current_keys () {
+  /usr/bin/ssh-add -D
+}
+
+inform_keys_expiry () {
+  echo "Loading keys for $HOURS hours"
+}
+
+login_and_remove_keys () {
+  login_user
+  remove_current_keys
+  inform_keys_expiry
+}
+
+# the bare minimum are the user initials for .git-authors or email address
+if [[ -z $USER_INITIALS ]]; then
+  print_usage
+fi
+
+# if we dont't have any but the first parameter (initials or email), assume
+# that the user just wants to load the default key for the default time
+if [[ -z $KEY_TARGETS ]]; then
+  set_default_time
+  login_and_remove_keys
+  load_main_key
+  exit 0
+fi
+
+# in reality this should never trigger, as we accept a third parameter (hours), so any spaces
+# will be interpreted by the shell as parameter delimiters, but...
+if ! [[ $KEY_TARGETS =~ ^(.+)(,.+)*$ ]]; then
+  print_usage "Your key suffixes should be passed as a comma-separated string with no spaces"
+fi
+
+# if the third parameter (hours) is ommited, load all keys for the default time
+if [[ -z $HOURS ]]; then
+  set_default_time
+fi
+
+# if the third parameter (hours) is supplied, it must be a positive integer
+if ! [[ $HOURS =~ ^[0-9]+$ ]]; then
+  print_usage "Your hours must be in integer format. '$HOURS' is not an integer"
+fi
+
+# we have all we need to load the keys
+login_user
+login_and_remove_keys
+load_main_key
+load_multiple_keys $KEY_TARGETS
+
+exit 0
